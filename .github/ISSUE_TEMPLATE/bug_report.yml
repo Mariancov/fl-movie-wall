@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a bug or broken selector after Filelist changes
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill in the details below.
+
+  - type: input
+    id: url
+    attributes:
+      label: Page URL
+      description: The exact Filelist page where it happens (browse.php link)
+      placeholder: https://filelist.io/browse.php?...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Select genre ...
+        3. Switch Grid/List ...
+        4. See issue ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: What happens instead?
+    validations:
+      required: true
+
+  - type: input
+    id: manager
+    attributes:
+      label: Userscript manager
+      placeholder: Tampermonkey 5.x / Violentmonkey x.x
+    validations:
+      required: false
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console errors (optional)
+      render: shell
+    validations:
+      required: false
