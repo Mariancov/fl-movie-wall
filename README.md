@@ -1,29 +1,65 @@
-# FL Movie Wall
+# 🎬 FL Movie Wall
 
-[![Release](https://img.shields.io/github/v/release/Mariancov/fl-movie-wall?label=release)](https://github.com/Mariancov/fl-movie-wall/releases)
-[![Stars](https://img.shields.io/github/stars/Mariancov/fl-movie-wall?style=flat)](https://github.com/Mariancov/fl-movie-wall/stargazers)
-[![Issues](https://img.shields.io/github/issues/Mariancov/fl-movie-wall)](https://github.com/Mariancov/fl-movie-wall/issues)
+<p align="center">
+  Turn Filelist browse into a cinematic movie wall.
+</p>
 
-Userscript (Tampermonkey / Violentmonkey) that turns Filelist browse into a movie wall:
+<p align="center">
+  <a href="https://github.com/Mariancov/fl-movie-wall/releases">
+    <img src="https://img.shields.io/github/v/release/Mariancov/fl-movie-wall?label=Release&style=flat-square">
+  </a>
+  <a href="https://github.com/Mariancov/fl-movie-wall/stargazers">
+    <img src="https://img.shields.io/github/stars/Mariancov/fl-movie-wall?style=flat-square">
+  </a>
+  <a href="https://github.com/Mariancov/fl-movie-wall/issues">
+    <img src="https://img.shields.io/github/issues/Mariancov/fl-movie-wall?style=flat-square">
+  </a>
+  <img src="https://img.shields.io/github/license/Mariancov/fl-movie-wall?style=flat-square">
+</p>
 
-- Persistent genre filter
-- Poster grid (thumbs via details.php + cache)
-- OG FL-inspired UI
-- Draggable panel with remembered position
-- Grid/List toggle + Hide list
+---
 
-## Install (auto-update)
-➡️ **Install / Update**
+## ✨ What is FL Movie Wall?
+
+A lightweight **userscript** that transforms Filelist browse pages into a modern **poster grid**, while keeping the classic OG Filelist look and performance.
+
+No plugins. No extensions. Just one script.
+
+---
+
+## 🚀 Install
+
+👉 **Click to install / update automatically**
+
 https://raw.githubusercontent.com/Mariancov/fl-movie-wall/main/dist/fl-movie-wall.user.js
 
-Open the link, Tampermonkey will prompt Install.
+Tampermonkey or Violentmonkey will prompt you to install.
 
-## Updates
-Bump `@version` inside `dist/fl-movie-wall.user.js`, then push to `main`.
+---
 
-## Release flow
-Tag a release:
+## ⚙️ Features
 
-```bash
-git tag v2.5
-git push --tags
+- 🎯 Persistent genre filtering
+- 🧱 Movie poster grid view
+- 🖼️ Thumbnails loaded from `details.php`
+- 💾 Smart caching (localStorage)
+- 🧲 Draggable control panel (position saved)
+- 🎮 Grid / List toggle
+- 🙈 Hide original list option
+- ⚡ Ultra lightweight — zero dependencies
+
+---
+
+## 📦 Requirements
+
+Install a userscript manager:
+
+- Tampermonkey
+- Violentmonkey
+
+---
+
+## 🔄 Updates
+
+The script auto-updates thanks to:
+
