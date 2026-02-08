@@ -21,17 +21,17 @@
 
 ---
 
-## ✨ What is FL Movie Wall?
+## ✨ About
 
-A lightweight userscript that transforms Filelist browse pages into a modern poster grid while keeping the OG Filelist look and performance.
+FL Movie Wall is a lightweight userscript that transforms Filelist browse pages into a modern **poster grid** while keeping the classic OG Filelist look and performance.
 
 No plugins. No extensions. Just one script.
 
 ---
 
-## 🚀 Install (Auto Update Enabled)
+## 🚀 Install (Auto-Update Enabled)
 
-👉 **Install / Update Script**
+👉 Install / Update Script:
 
 https://raw.githubusercontent.com/Mariancov/fl-movie-wall/main/dist/fl-movie-wall.user.js
 
@@ -42,31 +42,31 @@ Open the link and Tampermonkey or Violentmonkey will prompt **Install** automati
 ## ⚙️ Features
 
 - Persistent genre filter  
-- Poster movie grid  
-- Thumbnails from `details.php` (cached)  
-- Draggable panel with saved position  
+- Movie poster grid view  
+- Thumbnails fetched from `details.php` and cached  
+- Draggable control panel (position remembered)  
 - Grid / List toggle  
 - Hide original list option  
-- Lightweight and fast (no dependencies)
+- Lightweight — no external dependencies  
 
 ---
 
 ## 🔄 Updates
 
-The script updates automatically thanks to the `@updateURL` and `@downloadURL` fields inside the userscript header.
+The script supports automatic updates via the `@updateURL` and `@downloadURL` fields.
 
-To release a new version:
+New version workflow:
 
-1. Edit `dist/fl-movie-wall.user.js`  
-2. Increase version number (example: `2.4` → `2.5`)  
-3. Push changes to `main`
+- Edit `dist/fl-movie-wall.user.js`
+- Increase `@version`
+- Push to `main`
 
-Users will receive the update automatically.
+Users will receive updates automatically.
 
 ---
 
-## 🏷️ Release Flow (Optional)
+## 🏷️ Releases (Optional)
 
 ```bash
-git tag v2.5
+git tag vX.X
 git push --tags
