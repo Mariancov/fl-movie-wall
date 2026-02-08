@@ -63,10 +63,3 @@ New version workflow:
 
 Users will receive updates automatically.
 
----
-
-## 🏷️ Releases (Optional)
-
-```bash
-git tag vX.X
-git push --tags
