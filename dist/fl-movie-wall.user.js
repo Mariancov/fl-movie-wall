@@ -32,7 +32,7 @@
   const PLEX_WEB_URL = 'https://app.plex.tv/desktop#!/';
 
   // Card hover trailer preview
-  const CARD_HOVER_OPEN_MS = 3000;
+  const CARD_HOVER_OPEN_MS = 1000;
   const CARD_HOVER_CLOSE_MS = 220;
   const CARD_PREVIEW_REQUIRE_YT = true; // if true: only arm if ytId exists
   const CARD_PREVIEW_AUTOPLAY_MUTED = true;
