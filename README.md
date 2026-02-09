@@ -48,6 +48,9 @@ Open the link and Tampermonkey or Violentmonkey will prompt **Install** automati
 - Grid / List toggle  
 - Hide original list option  
 - Lightweight — no external dependencies  
+- **Card hover trailer preview (3s delay):** Hover any poster card for 3 seconds to auto-open an autoplay (muted) trailer preview popup (if a YouTube trailer exists on `details.php`).
+- **Hover arming indicator:** While hovering, a small progress bar animates at the bottom of the card so the user knows the trailer preview is about to load.
+- **Trailer popup pinning:** Click empty space on a card (not links) to pin/unpin the trailer preview popup; press **Esc** to close.
 
 ---
 
