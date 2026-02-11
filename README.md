@@ -39,6 +39,77 @@ Open the link and Tampermonkey or Violentmonkey will prompt **Install** automati
 
 ---
 
+## 🧩 Step-by-step: install Tampermonkey (Chrome / Edge / Brave)
+
+### 1) Install the Tampermonkey extension
+Open the official store page for your browser and click **Add to browser**:
+
+- **Chrome Web Store (Chrome / Brave / most Chromium browsers):**  
+  https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo
+
+- **Microsoft Edge Add-ons:**  
+  https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd
+
+> If your browser blocks install from stores, you can also search “Tampermonkey extension” in your browser’s extension store.
+
+---
+
+### 2) Make sure extensions can run “UserScripts”
+Some browsers require enabling UserScripts / Developer options.
+
+#### Brave
+1. Go to: `brave://extensions/`
+2. Toggle **Developer mode** (top-right)
+3. Click **Tampermonkey**
+4. Enable **Allow access to file URLs** (optional) and **Allow in private** (optional)
+5. Make sure Tampermonkey is **Enabled**
+
+#### Chrome
+1. Go to: `chrome://extensions/`
+2. Toggle **Developer mode** (top-right)
+3. Click **Tampermonkey**
+4. (Optional) Enable **Allow in incognito**
+5. Make sure Tampermonkey is **Enabled**
+
+#### Edge
+1. Go to: `edge://extensions/`
+2. Toggle **Developer mode**
+3. Click **Tampermonkey**
+4. Make sure it’s **Enabled**
+
+> Note: You generally do **not** need “file access” for this script (it runs on `filelist.io`), but enabling Developer mode helps in some setups.
+
+---
+
+### 3) Enable Tampermonkey settings (recommended)
+1. Click the **Tampermonkey** icon in the browser toolbar
+2. Open **Dashboard**
+3. Go to **Settings**
+4. Recommended toggles:
+   - ✅ **Config mode**: **Beginner** or **Advanced** (either works)
+   - ✅ **Check for updates**: **Daily** (or more frequent if you want)
+   - ✅ **Script update**: **Enabled**
+
+---
+
+### 4) Install FL Movie Wall
+1. Open this link:
+   https://raw.githubusercontent.com/Mariancov/fl-movie-wall/main/dist/fl-movie-wall.user.js
+2. Tampermonkey will open an install page
+3. Click **Install**
+
+Done ✅
+
+---
+
+## ▶️ Use it
+Open Filelist browse:
+- https://filelist.io/browse.php
+
+You’ll see the panel + grid (depending on your saved view mode).
+
+---
+
 ## ⚙️ Features
 
 - Persistent genre filter  
