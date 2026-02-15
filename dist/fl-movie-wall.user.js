@@ -39,7 +39,7 @@
   const PLEX_WEB_URL = 'https://app.plex.tv/desktop#!/';
 
   // Card hover trailer preview
-  const CARD_HOVER_OPEN_MS = 3000; // you asked 3 seconds
+  const CARD_HOVER_OPEN_MS = 1000; // you asked 3 seconds
   const CARD_HOVER_CLOSE_MS = 220;
   const CARD_PREVIEW_REQUIRE_YT = true; // only arm if ytId exists
   const CARD_PREVIEW_AUTOPLAY_MUTED = true;
@@ -472,26 +472,35 @@
         user-select: none;
       }
       #fl-genre-panel *{box-sizing:border-box;}
-      #fl-genre-panel .hdr{
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        padding: 10px 10px 8px;
-        gap: 10px;
-        background:
-          linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0)),
-          linear-gradient(90deg, rgba(123,210,31,.18), rgba(123,210,31,0) 35%);
-        border-bottom: 1px solid var(--fl-border);
-        cursor: grab;
-      }
+     #fl-genre-panel .hdr{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: 10px 10px 8px;
+  gap: 10px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0)),
+    linear-gradient(90deg, rgba(123,210,31,.18), rgba(123,210,31,0) 35%);
+  border-bottom: 1px solid var(--fl-border);
+  cursor: grab;
+
+  /* FIX: prevent overflow */
+  min-width: 0;
+}
       #fl-genre-panel.dragging .hdr{ cursor: grabbing; }
-      #fl-genre-panel .hdr b{
-        font-size: 12.5px;
-        letter-spacing: .2px;
-        text-shadow: 0 0 12px rgba(123,210,31,.18);
-        user-select:none;
-        white-space: nowrap;
-      }
+     #fl-genre-panel .hdr b{
+  font-size: 12.5px;
+  letter-spacing: .2px;
+  text-shadow: 0 0 12px rgba(123,210,31,.18);
+  user-select:none;
+
+  /* FIX: let title shrink instead of pushing buttons out */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
       #fl-genre-panel .hdr .btn{
         cursor:pointer;
         user-select:none;
@@ -1289,7 +1298,7 @@
     panel.innerHTML = `
       <div class="hdr">
         <b>FILELIST • GENRE GRID${catInfo}</b>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div style="display:flex;gap:8px;align-items:center;flex:0 0 auto;white-space:nowrap;">
           <div class="btn" id="fl-collapse">${ui.collapsed ? '▶' : '▼'}</div>
           <div class="btn" id="fl-refresh">Refresh</div>
         </div>
