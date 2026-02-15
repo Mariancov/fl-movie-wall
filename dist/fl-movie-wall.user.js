@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Filelist Genre Filter + Movie Grid (OG FL look + draggable panel)
 // @namespace    https://github.com/Mariancov/fl-movie-wall
-// @version      2.6.0
-// @description  Filter Filelist torrents by genre (persistent) + poster grid (thumbs/rating/trailer via details.php + cache). OG Filelist-inspired design + draggable panel + auto-fill results.
+// @version      2.6
+// @description  Filter Filelist torrents by genre (persistent) + poster grid (thumbs via details.php + cache). OG Filelist-inspired design + draggable panel with remembered position.
 // @author       Mariancov
 // @match        https://filelist.io/browse.php*
 // @match        https://www.filelist.io/browse.php*
@@ -18,37 +18,26 @@
 (function () {
   'use strict';
 
-  // ---------------- Keys ----------------
-  const STORAGE_KEY = 'fl_genre_filter_v2';           // selected genres for current category
+  const STORAGE_KEY = 'fl_genre_filter_v2';
   const UI_KEY = 'fl_genre_ui_v2';
   const VIEW_KEY = 'fl_genre_view_v2';
+
   const PANEL_POS_KEY = 'fl_panel_pos_v1';
 
-  // Learn/accumulate all genres per Filelist "cat" (category dropdown)
-  const GENRE_BANK_KEY = 'fl_genre_bank_v1';          // { [catId]: { [genre]: true } }
-
-  // Details meta cache (thumb + rating + ytId)
-  const META_CACHE_KEY = 'fl_thumb_cache_v3';         // { [detailsAbs]: {thumb,rating,ytId,ts} }
+  const META_CACHE_KEY = 'fl_thumb_cache_v3'; // {thumb,rating,ytId,ts}
   const META_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const FETCH_CONCURRENCY = 4;
 
-  // Plex (kept but currently hidden via CSS below)
   const PLEX_HANDOFF_KEY = 'flmw_plex_handoff_v1';
   const PLEX_WEB_URL = 'https://app.plex.tv/desktop#!/';
 
-  // Card hover trailer preview (1 seconds)
-  const CARD_HOVER_OPEN_MS = 1000;
+  const CARD_HOVER_OPEN_MS = 3000;
   const CARD_HOVER_CLOSE_MS = 220;
   const CARD_PREVIEW_REQUIRE_YT = true;
   const CARD_PREVIEW_AUTOPLAY_MUTED = true;
 
-  // Auto-fill results after filtering (avoid pages with 0-5 results)
-  const AUTO_FILL_TARGET = 20;        // try to show this many visible items
-  const AUTO_FILL_MAX_PAGES = 6;      // fetch at most N pages ahead
-  const AUTO_FILL_MAX_NEW_ROWS = 140; // hard safety cap
-
-  // What's new popup (first run after update)
-  const WHATSNEW_SEEN_KEY = 'flmw_seen_whatsnew_2_6_0';
+  const TARGET_VISIBLE = 20;
+  const MAX_PAGE_FETCH = 14;
 
   const DEFAULT_UI = {
     collapsed: false,
@@ -57,9 +46,22 @@
     query: '',
   };
 
-  // ---------------- Utils ----------------
   function log(...a) { console.log('[FL Grid]', ...a); }
   function safeJSONParse(s, fallback) { try { return JSON.parse(s); } catch { return fallback; } }
+
+  function getSavedFilter() { return safeJSONParse(localStorage.getItem(STORAGE_KEY) || '{}', {}); }
+  function saveFilter(data) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data || {})); }
+
+  function getUIState() { return { ...DEFAULT_UI, ...(safeJSONParse(localStorage.getItem(UI_KEY) || '{}', {})) }; }
+  function saveUIState(data) { localStorage.setItem(UI_KEY, JSON.stringify(data || {})); }
+
+  function getViewMode() { return localStorage.getItem(VIEW_KEY) || 'grid'; }
+  function setViewMode(mode) { localStorage.setItem(VIEW_KEY, mode); }
+
+  function getPanelPos() { return safeJSONParse(localStorage.getItem(PANEL_POS_KEY) || 'null', null); }
+  function savePanelPos(pos) { localStorage.setItem(PANEL_POS_KEY, JSON.stringify(pos)); }
+
+  function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 
   function escapeHtml(s) {
     return String(s || '')
@@ -70,8 +72,6 @@
       .replaceAll("'", '&#039;');
   }
 
-  function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
-
   function normalizeToAbs(url) {
     if (!url) return url;
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
@@ -79,99 +79,27 @@
     return location.origin + '/' + url;
   }
 
-  function getViewMode() { return localStorage.getItem(VIEW_KEY) || 'grid'; }
-  function setViewMode(mode) { localStorage.setItem(VIEW_KEY, mode); }
-
-  function getUIState() { return { ...DEFAULT_UI, ...(safeJSONParse(localStorage.getItem(UI_KEY) || '{}', {})) }; }
-  function saveUIState(data) { localStorage.setItem(UI_KEY, JSON.stringify(data || {})); }
-
-  // Selected filter (for current cat)
-  function getSavedFilter() { return safeJSONParse(localStorage.getItem(STORAGE_KEY) || '{}', {}); }
-  function saveFilter(data) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data || {})); }
-
-  // Panel position
-  function getPanelPos() { return safeJSONParse(localStorage.getItem(PANEL_POS_KEY) || 'null', null); }
-  function savePanelPos(pos) { localStorage.setItem(PANEL_POS_KEY, JSON.stringify(pos)); }
-
-  // Category id from URL (?cat=19)
-  function getCatId() {
-    const u = new URL(location.href);
-    return String(u.searchParams.get('cat') || '0');
-  }
-
-  // Genre bank per category
-  function loadGenreBank() { return safeJSONParse(localStorage.getItem(GENRE_BANK_KEY) || '{}', {}); }
-  function saveGenreBank(bank) { localStorage.setItem(GENRE_BANK_KEY, JSON.stringify(bank || {})); }
-  function learnGenresForCat(catId, genres) {
-    if (!genres?.length) return;
-    const bank = loadGenreBank();
-    bank[catId] = bank[catId] || {};
-    let changed = false;
-    genres.forEach(g => {
-      const k = String(g || '').trim();
-      if (!k) return;
-      if (!bank[catId][k]) { bank[catId][k] = true; changed = true; }
-    });
-    if (changed) saveGenreBank(bank);
-  }
-  function getKnownGenresForCat(catId) {
-    const bank = loadGenreBank();
-    const obj = bank[catId] || {};
-    return Object.keys(obj).sort((a, b) => a.localeCompare(b));
-  }
-
-  // ---------------- Genre parsing (fix old pipe format) ----------------
-  // Supports:
-  // - "[Action, Comedy, Crime]" (classic)
-  // - "Action | Comedy | Crime | Thriller" (old format / duplicates)
-  // - "Action, Comedy, Crime" (plain)
   function extractGenres(text) {
-    const raw = String(text || '').trim();
-    if (!raw) return [];
-
-    // If bracketed, prefer the inside
-    const bracket = raw.match(/\[([^\]]+)\]/);
-    const inside = bracket ? bracket[1] : raw;
-
-    // Normalize separators: | and , and / (rare) into comma
-    const normalized = inside
+    const t = (text || '')
+      .replace(/[\[\]]/g, '')
       .replace(/\s*\|\s*/g, ',')
-      .replace(/\s*\/\s*/g, ',')
-      .replace(/\s*,\s*/g, ',')
-      .trim();
-
-    const parts = normalized
+      .replace(/\s*\/\s*/g, ',');
+    return t
       .split(',')
-      .map(x => x.trim())
+      .map(g => g.trim())
       .filter(Boolean);
-
-    // Deduplicate + clean
-    const out = [];
-    const seen = new Set();
-    for (const p of parts) {
-      const g = p.replace(/\s+/g, ' ').trim();
-      if (!g) continue;
-      const key = g.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(g);
-    }
-    return out;
   }
 
   function findGenreFont(row) {
-    // Filelist puts genres inside font.small (often bracketed)
-    const fonts = [...row.querySelectorAll('font.small')];
-    // best guess: the one containing '[' or '|' or multiple commas
-    return fonts.find(f => {
-      const t = (f.textContent || '');
-      return t.includes('[') || t.includes('|') || (t.split(',').length >= 2);
-    }) || null;
+    return [...row.querySelectorAll('font.small')]
+      .find(f => f.textContent.includes('[') && f.textContent.includes(']')) || null;
   }
 
-  function getAllRows() { return [...document.querySelectorAll('.torrentrow')]; }
+  function getAllRows() {
+    return [...document.querySelectorAll('.torrentrow')];
+  }
 
-  function scanGenresFromPageRows() {
+  function scanGenres() {
     const set = new Set();
     getAllRows().forEach(row => {
       const f = findGenreFont(row);
@@ -181,10 +109,76 @@
     return [...set].sort((a, b) => a.localeCompare(b));
   }
 
-  // ---------------- Filtering ----------------
+  function ensureExtraRowsHost() {
+    let host = document.getElementById('fl-extra-rows');
+    if (host) return host;
+    host = document.createElement('div');
+    host.id = 'fl-extra-rows';
+    host.style.cssText = 'display:none!important;';
+    document.body.appendChild(host);
+    return host;
+  }
+
+  function currentParamsKey() {
+    const u = new URL(location.href);
+    const p = u.searchParams;
+    const parts = [
+      'cat=' + (p.get('cat') || ''),
+      'search=' + (p.get('search') || ''),
+      'searchin=' + (p.get('searchin') || ''),
+      'sort=' + (p.get('sort') || ''),
+      'asc=' + (p.get('asc') || ''),
+      'type=' + (p.get('type') || ''),
+    ];
+    return 'flmw_ctx_v1::' + parts.join('&');
+  }
+
+  function loadCtx() {
+    const key = currentParamsKey();
+    const raw = sessionStorage.getItem(key);
+    let obj = {};
+    try { obj = raw ? JSON.parse(raw) : {}; } catch { obj = {}; }
+    obj.seen = obj.seen || {};
+    obj.maxFetchedPage = obj.maxFetchedPage || 0;
+    return { key, obj };
+  }
+
+  function saveCtx(key, obj) {
+    sessionStorage.setItem(key, JSON.stringify(obj));
+  }
+
+  function extractTorrentIdFromRow(row) {
+    const a =
+      row.querySelector('a[href*="details.php?id="]') ||
+      row.querySelector('a[href*="download.php?id="]');
+    const href = a?.getAttribute('href') || '';
+    const m = href.match(/[?&]id=(\d+)/);
+    return m ? m[1] : null;
+  }
+
+  function markAndHideDuplicatesInDOM() {
+    const { key, obj } = loadCtx();
+    document.querySelectorAll('.torrentrow').forEach(row => {
+      const id = extractTorrentIdFromRow(row);
+      if (!id) return;
+      if (obj.seen[id]) {
+        row.style.display = 'none';
+        row.dataset.flDuplicate = '1';
+      } else {
+        obj.seen[id] = 1;
+      }
+    });
+    saveCtx(key, obj);
+  }
+
   function applyFilter(selected) {
     const hasSelection = Object.keys(selected || {}).length > 0;
     getAllRows().forEach(row => {
+      if (row.dataset.flDuplicate === '1') {
+        row.style.display = 'none';
+        row.dataset.flVisible = '0';
+        return;
+      }
       const f = findGenreFont(row);
       if (!f) return;
       const genres = extractGenres(f.textContent);
@@ -194,11 +188,6 @@
     });
   }
 
-  function getVisibleRowCount() {
-    return getAllRows().filter(r => r.style.display !== 'none').length;
-  }
-
-  // ---------------- Trailer popup (hover card 1s) ----------------
   let hoverOpenT = 0;
   let hoverCloseT = 0;
   let popPinned = false;
@@ -246,7 +235,7 @@
             allowfullscreen></iframe>
         </div>
         <div style="margin-top:8px; color:#97a4b6; font-size:11px;">
-          Hover a card for 1s to preview • Click 📌 to pin • Esc to close
+          Hover 3s on a card to preview • Click 📌 to pin
         </div>
       </div>
     `;
@@ -273,8 +262,6 @@
     if (!pop || !cardEl) return;
 
     const r = cardEl.getBoundingClientRect();
-
-    // Show first to measure
     const popRect = pop.getBoundingClientRect();
     const margin = 10;
 
@@ -320,7 +307,6 @@
     const iframe = document.getElementById('fl-trailer-pop-iframe');
     if (!pop) return;
     if (!force && popPinned) return;
-
     pop.style.display = 'none';
     if (iframe) iframe.src = '';
   }
@@ -367,7 +353,6 @@
     armedCard = null;
   }
 
-  // ---------------- Styles ----------------
   function injectStyles() {
     if (document.getElementById('fl-grid-styles')) return;
 
@@ -377,16 +362,19 @@
     style.textContent = `
       :root{
         --fl-bg: #0b1016;
+        --fl-panel: #0f1620;
+        --fl-panel2: #0c121a;
         --fl-border: #263141;
         --fl-border2:#1b2431;
         --fl-text: #d7dde6;
         --fl-muted:#97a4b6;
         --fl-accent:#7bd21f;
         --fl-shadow: rgba(0,0,0,.55);
+
+        --plex-yellow: #e5a00d;
         --plex-yellow2:#ffd36b;
       }
 
-      /* Draggable panel */
       #fl-genre-panel{
         position:fixed;
         z-index: 999999;
@@ -402,7 +390,6 @@
         user-select: none;
       }
       #fl-genre-panel *{box-sizing:border-box;}
-
       #fl-genre-panel .hdr{
         display:flex;
         align-items:center;
@@ -415,8 +402,6 @@
         border-bottom: 1px solid var(--fl-border);
         cursor: grab;
       }
-      #fl-genre-panel.dragging .hdr{ cursor: grabbing; }
-
       #fl-genre-panel .hdr b{
         font-size: 12.5px;
         letter-spacing: .2px;
@@ -425,17 +410,13 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        min-width: 0;
+        flex: 1 1 auto;
       }
-
-      /* fix: keep buttons INSIDE header */
-      #fl-genre-panel .hdr .actions{
-        display:flex;
-        gap:8px;
-        align-items:center;
+      #fl-genre-panel .hdr > div{
         flex: 0 0 auto;
-        white-space: nowrap;
       }
-
+      #fl-genre-panel.dragging .hdr{ cursor: grabbing; }
       #fl-genre-panel .hdr .btn{
         cursor:pointer;
         user-select:none;
@@ -445,12 +426,12 @@
         background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
         color: var(--fl-text);
         box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+        white-space: nowrap;
       }
       #fl-genre-panel .hdr .btn:hover{
         border-color: rgba(123,210,31,.45);
         box-shadow: 0 0 0 2px rgba(123,210,31,.08), inset 0 1px 0 rgba(255,255,255,.05);
       }
-
       #fl-genre-panel .body{
         padding: 10px;
         background: radial-gradient(800px 300px at 15% 0%, rgba(123,210,31,.08), rgba(0,0,0,0) 55%);
@@ -511,7 +492,6 @@
 
       #fl-genre-panel.collapsed .body{display:none;}
 
-      /* GRID WRAP */
       #fl-grid-wrap{
         width: min(1320px, calc(100% - 28px));
         margin: 14px auto 40px;
@@ -535,12 +515,12 @@
       #fl-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(var(--fl-card), 1fr)); gap: 10px; }
 
       .fl-card{
-        position: relative;
         border-radius: 10px; overflow: hidden;
         border: 1px solid var(--fl-border);
         background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.01));
         box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 10px 22px rgba(0,0,0,.25);
         transition: transform .08s ease, box-shadow .08s ease, border-color .08s ease;
+        position: relative;
       }
       .fl-card:hover{
         transform: translateY(-2px);
@@ -548,7 +528,6 @@
         box-shadow: 0 14px 28px rgba(0,0,0,.35), 0 0 0 2px rgba(123,210,31,.08), inset 0 1px 0 rgba(255,255,255,.04);
       }
 
-      /* Hover arming bar (3 seconds) */
       .fl-card::after{
         content:"";
         position:absolute;
@@ -568,7 +547,10 @@
         animation: flCardArm ${CARD_HOVER_OPEN_MS}ms linear forwards;
         background: linear-gradient(90deg, rgba(120,180,255,.0), rgba(120,180,255,.95));
       }
-      @keyframes flCardArm{ from{transform:scaleX(0);} to{transform:scaleX(1);} }
+      @keyframes flCardArm{
+        from{ transform: scaleX(0); }
+        to{ transform: scaleX(1); }
+      }
 
       .fl-card a{ text-decoration:none; color: inherit; }
       .fl-poster{
@@ -621,76 +603,55 @@
         background: linear-gradient(180deg, rgba(123,210,31,.22), rgba(123,210,31,.08));
         color: #eaffd0;
       }
-      .fl-badge.plex{
-        border-color: rgba(229,160,13,.55);
-        background: linear-gradient(180deg, rgba(229,160,13,.24), rgba(229,160,13,.10));
-        color: var(--plex-yellow2);
-        font-weight: 800;
-      }
 
       body.fl-hide-original .torrentrow{ display:none !important; }
 
-      /* Plex row pill (kept but hidden for now) */
-      .flmw-plex-pill{
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        height: 22px;
-        padding: 0 8px;
-        margin-left: 6px;
-        border-radius: 999px;
-        border: 1px solid rgba(229,160,13,.55);
-        background: linear-gradient(180deg, rgba(229,160,13,.22), rgba(229,160,13,.10));
-        color: var(--plex-yellow2) !important;
-        font: 800 11px/1 Tahoma, Verdana, Arial, sans-serif;
-        letter-spacing: .2px;
-        text-decoration: none !important;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-        cursor: pointer;
-        user-select:none;
-        white-space:nowrap;
-      }
-
-      /* TEMP: hide all Plex buttons */
-      .flmw-plex-pill,
-      .fl-badge.plex { display:none !important; }
-
-      /* small status line */
-      #fl-auto-fill-status{
-        margin-top: 6px;
-        font-size: 11px;
-        color: var(--fl-muted);
-      }
+      .flmw-plex-pill{ display:none !important; }
+      .fl-badge.plex{ display:none !important; }
     `;
 
     document.head.appendChild(style);
   }
 
-  // ---------------- Plex (kept) ----------------
   function plexNormalizeTitle(raw) {
     return String(raw || '')
       .replace(/[\._]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
-  function plexSaveHandoff(payload) { localStorage.setItem(PLEX_HANDOFF_KEY, JSON.stringify(payload || {})); }
+
+  function plexSaveHandoff(payload) {
+    localStorage.setItem(PLEX_HANDOFF_KEY, JSON.stringify(payload || {}));
+  }
+
   function plexOpen(title, fromUrl) {
     const t = plexNormalizeTitle(title);
     if (!t) return;
 
-    plexSaveHandoff({ title: t, rawTitle: title, fromUrl: fromUrl || location.href, ts: Date.now() });
+    plexSaveHandoff({
+      title: t,
+      rawTitle: title,
+      fromUrl: fromUrl || location.href,
+      ts: Date.now(),
+    });
+
     const url = `${PLEX_WEB_URL}?flmw_title=${encodeURIComponent(t)}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   }
+
   function addPlexButtonsToRows() {
     const rows = getAllRows();
     rows.forEach(row => {
       if (row.dataset.flmwPlexInjected === '1') return;
 
-      const dlA = row.querySelector('a[href^="download.php?id="], a[href*="download.php?id="]');
+      const dlA =
+        row.querySelector('a[href^="download.php?id="]') ||
+        row.querySelector('a[href*="download.php?id="]');
       if (!dlA) return;
 
-      const titleA = row.querySelector('a[href^="details.php?id="], a[href*="details.php?id="]');
+      const titleA =
+        row.querySelector('a[href^="details.php?id="]') ||
+        row.querySelector('a[href*="details.php?id="]');
       if (!titleA) return;
 
       const rawTitle = (titleA.textContent || '').trim();
@@ -709,6 +670,7 @@
       btn.className = 'flmw-plex-pill';
       btn.textContent = 'PLEX';
       btn.title = 'Play in Plex after download';
+
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -720,7 +682,6 @@
     });
   }
 
-  // ---------------- Details meta cache ----------------
   function loadMetaCache() { return safeJSONParse(localStorage.getItem(META_CACHE_KEY) || '{}', {}); }
   function saveMetaCache(cache) { localStorage.setItem(META_CACHE_KEY, JSON.stringify(cache || {})); }
 
@@ -731,6 +692,7 @@
     if (Date.now() - (item.ts || 0) > META_TTL_MS) return null;
     return item;
   }
+
   function setCachedMeta(detailsUrlAbs, meta) {
     const cache = loadMetaCache();
     cache[detailsUrlAbs] = { ...(meta || {}), ts: Date.now() };
@@ -746,27 +708,27 @@
     return null;
   }
 
-  // More robust rating extraction for your provided HTML
   function extractStarRatingFromDetailsHTML(html) {
     if (!html) return null;
     try {
       const doc = new DOMParser().parseFromString(html, 'text/html');
 
-      // Prefer: the left block (poster block) that contains starbig and date
-      let span =
-        doc.querySelector('div[style*="width:300px"] img[src*="starbig.png"]')?.closest('span') ||
-        doc.querySelector('img[src*="starbig.png"]')?.closest('span');
+      const spans = [...doc.querySelectorAll('span')];
+      for (const sp of spans) {
+        const img = sp.querySelector('img[src*="starbig.png"]');
+        if (!img) continue;
 
-      if (!span) return null;
-
-      // strip images, parse number
-      const clone = span.cloneNode(true);
-      clone.querySelectorAll('img').forEach(i => i.remove());
-      const txt = (clone.textContent || '').replace(/\s+/g, ' ').trim();
-
-      const m = txt.match(/(\d{1,2}(?:[.,]\d{1,2})?)/);
-      const v = m?.[1] ? m[1].replace(',', '.') : null;
-      return v || null;
+        const clone = sp.cloneNode(true);
+        clone.querySelectorAll('img').forEach(i => i.remove());
+        const txt = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+        const m = txt.match(/(\d{1,2}(?:[.,]\d{1,2})?)/);
+        if (m && m[1]) {
+          const v = m[1].replace(',', '.');
+          const num = Number(v);
+          if (!Number.isNaN(num) && num > 0 && num <= 10) return String(num);
+        }
+      }
+      return null;
     } catch {
       return null;
     }
@@ -810,7 +772,6 @@
     }
   }
 
-  // Concurrency queue
   function createQueue(limit) {
     let active = 0;
     const q = [];
@@ -828,19 +789,23 @@
   }
   const runQueued = createQueue(FETCH_CONCURRENCY);
 
-  // ---------------- Row -> data ----------------
   function getRowData(row) {
-    const titleLink = row.querySelector('a[href^="details.php?id="], a[href*="details.php?id="]');
+    const titleLink =
+      row.querySelector('a[href^="details.php?id="]') ||
+      row.querySelector('a[href*="details.php?id="]');
+
     const title = titleLink ? titleLink.textContent.trim() : 'Untitled';
     const detailsHref = titleLink ? titleLink.getAttribute('href') : '#';
 
-    const downloadLink = row.querySelector('a[href^="download.php?id="], a[href*="download.php?id="]');
+    const downloadLink =
+      row.querySelector('a[href^="download.php?id="]') ||
+      row.querySelector('a[href*="download.php?id="]');
+
     const downloadHref = downloadLink ? downloadLink.getAttribute('href') : null;
 
     const gf = findGenreFont(row);
     const genres = gf ? extractGenres(gf.textContent) : [];
 
-    // Best-effort thumb in tooltip (fast)
     let thumb = null;
     const spanWithTooltip = row.querySelector('[data-original-title*="tmdb"], [data-original-title*="img"]');
     if (spanWithTooltip) {
@@ -875,7 +840,6 @@
     return { title, detailsHref, downloadHref, genres, thumb, sizeText, dateText, seeds, leech };
   }
 
-  // ---------------- Grid helpers ----------------
   function applyCardSize(px) {
     const grid = document.getElementById('fl-grid');
     if (!grid) return;
@@ -917,18 +881,19 @@
       const absDetails = normalizeToAbs(it.detailsHref);
       const meta = await fetchDetailsMeta(absDetails);
 
-      // poster
-      const img = document.querySelector(`#${CSS.escape(it.cardId)} img[data-fl-poster="1"]`);
-      const loader = document.querySelector(`#${CSS.escape(it.cardId)} .loading`);
-      if (meta.thumb && img) {
-        img.src = meta.thumb;
-        img.removeAttribute('data-fl-needs');
+      if (meta.thumb) {
+        const img = document.querySelector(`#${CSS.escape(it.cardId)} img[data-fl-poster="1"]`);
+        const loader = document.querySelector(`#${CSS.escape(it.cardId)} .loading`);
+        if (img) {
+          img.src = meta.thumb;
+          img.removeAttribute('data-fl-needs');
+        }
         if (loader) loader.remove();
       } else {
+        const loader = document.querySelector(`#${CSS.escape(it.cardId)} .loading`);
         if (loader) loader.textContent = 'No poster';
       }
 
-      // rating badge
       const ratingEl = document.querySelector(`#${CSS.escape(it.cardId)} [data-fl-rating="1"]`);
       if (ratingEl) {
         if (meta.rating) {
@@ -939,7 +904,6 @@
         }
       }
 
-      // yt id for hover
       const cardRoot = document.getElementById(it.cardId);
       if (cardRoot) {
         if (meta.ytId) cardRoot.setAttribute('data-fl-yt', meta.ytId);
@@ -949,6 +913,95 @@
     }));
 
     await Promise.allSettled(jobs);
+  }
+
+  function currentPageNum() {
+    const u = new URL(location.href);
+    const n = Number(u.searchParams.get('page') || '0');
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function buildBrowseUrlForPage(pageNum) {
+    const u = new URL(location.href);
+    u.searchParams.set('page', String(pageNum));
+    return u.toString();
+  }
+
+  async function fetchBrowseRows(pageNum) {
+    const url = buildBrowseUrlForPage(pageNum);
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return [...doc.querySelectorAll('.torrentrow')];
+  }
+
+  let autoFillRunning = false;
+
+  function countVisibleRowsAfterAll() {
+    const ui = getUIState();
+    const q = (ui.query || '').trim().toLowerCase();
+    return getAllRows()
+      .filter(r => r.style.display !== 'none')
+      .map(getRowData)
+      .filter(it => !q || it.title.toLowerCase().includes(q)).length;
+  }
+
+  async function autoFillToTarget() {
+    if (autoFillRunning) return;
+    if (getViewMode() !== 'grid') return;
+
+    const needNow = countVisibleRowsAfterAll();
+    if (needNow >= TARGET_VISIBLE) return;
+
+    autoFillRunning = true;
+
+    try {
+      ensureExtraRowsHost();
+      const host = document.getElementById('fl-extra-rows');
+
+      const { key, obj } = loadCtx();
+      const base = currentPageNum();
+      let start = Math.max(base + 1, (obj.maxFetchedPage || 0) + 1);
+      let page = start;
+
+      let safety = 0;
+      while (countVisibleRowsAfterAll() < TARGET_VISIBLE && safety++ < MAX_PAGE_FETCH) {
+        const rows = await fetchBrowseRows(page).catch(() => []);
+        if (!rows.length) break;
+
+        let addedAny = false;
+
+        for (const row of rows) {
+          const id = extractTorrentIdFromRow(row);
+          if (!id) continue;
+          if (obj.seen[id]) continue;
+
+          obj.seen[id] = 1;
+          row.dataset.flFetched = '1';
+          row.dataset.flDuplicate = '0';
+
+          host.appendChild(row);
+          addedAny = true;
+        }
+
+        obj.maxFetchedPage = Math.max(obj.maxFetchedPage || 0, page);
+        saveCtx(key, obj);
+
+        if (!addedAny) {
+          page++;
+          continue;
+        }
+
+        applyFilter(getSavedFilter());
+        rebuildGrid();
+        page++;
+      }
+    } catch (e) {
+      log('autoFill error', e);
+    } finally {
+      autoFillRunning = false;
+    }
   }
 
   function rebuildGrid() {
@@ -994,7 +1047,7 @@
       const absDetails = normalizeToAbs(it.detailsHref);
       const cachedMeta = getCachedMeta(absDetails);
 
-      const thumb = it.thumb || cachedMeta?.thumb || null;
+      let thumb = it.thumb || cachedMeta?.thumb || null;
       const needsFetch = (!cachedMeta) && it.detailsHref && it.detailsHref.includes('details.php?id=');
       if (needsFetch) metaFetchList.push({ detailsHref: it.detailsHref, cardId, title: it.title });
 
@@ -1039,7 +1092,6 @@
 
     if (metaFetchList.length) fillMetaForCards(metaFetchList);
 
-    // Plex (delegate)
     if (!grid.dataset.flPlexBound) {
       grid.dataset.flPlexBound = '1';
       grid.addEventListener('click', (e) => {
@@ -1052,7 +1104,6 @@
       }, true);
     }
 
-    // Card hover trailer preview (delegate)
     if (!grid.dataset.flCardHoverBound) {
       grid.dataset.flCardHoverBound = '1';
 
@@ -1078,12 +1129,9 @@
         disarmCardPreview(card);
       }, true);
 
-      // Click empty space on card to pin/unpin popup (no navigation)
       grid.addEventListener('click', (e) => {
         const card = e.target.closest('.fl-card');
         if (!card) return;
-
-        // allow normal clicks on links
         if (e.target.closest('a')) return;
 
         const yt = card.getAttribute('data-fl-yt') || '';
@@ -1121,129 +1169,6 @@
     }
   }
 
-  // ---------------- Auto-fill results after filtering ----------------
-  let autoFillRunning = false;
-
-  function getCurrentPageNumber() {
-    const u = new URL(location.href);
-    const p = Number(u.searchParams.get('page') || '0');
-    return Number.isFinite(p) ? p : 0;
-  }
-
-  function buildPageUrl(pageNum) {
-    const u = new URL(location.href);
-    u.searchParams.set('page', String(pageNum));
-    return u.toString();
-  }
-
-  async function fetchBrowsePageRows(pageUrl) {
-    const res = await fetch(pageUrl, { credentials: 'include' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    return [...doc.querySelectorAll('.torrentrow')];
-  }
-
-  function appendRowsToDom(rows) {
-    if (!rows?.length) return 0;
-
-    const all = getAllRows();
-    const last = all[all.length - 1];
-    const parent = last?.parentElement;
-    if (!parent) return 0;
-
-    let added = 0;
-    rows.forEach(r => {
-      // avoid duplicates by details link href
-      const a = r.querySelector('a[href^="details.php?id="], a[href*="details.php?id="]');
-      const href = a?.getAttribute('href') || '';
-      if (href) {
-        const already = document.querySelector(`.torrentrow a[href="${CSS.escape(href)}"]`);
-        if (already) return;
-      }
-      parent.appendChild(document.importNode(r, true));
-      added++;
-    });
-    return added;
-  }
-
-  function setAutoFillStatus(msg) {
-    const el = document.getElementById('fl-auto-fill-status');
-    if (!el) return;
-    el.textContent = msg || '';
-  }
-
-  async function autoFillResultsIfNeeded() {
-    // only if there is an active filter selection (otherwise you'd load extra pages for nothing)
-    const selected = getSavedFilter();
-    const hasSelection = Object.keys(selected || {}).length > 0;
-    if (!hasSelection) { setAutoFillStatus(''); return; }
-
-    if (autoFillRunning) return;
-    autoFillRunning = true;
-
-    try {
-      applyFilter(selected);
-
-      let visible = getVisibleRowCount();
-      if (visible >= AUTO_FILL_TARGET) { setAutoFillStatus(''); return; }
-
-      const startPage = getCurrentPageNumber();
-      let pagesTried = 0;
-      let totalAdded = 0;
-
-      setAutoFillStatus(`Auto-fill: loading more… (${visible}/${AUTO_FILL_TARGET})`);
-
-      while (visible < AUTO_FILL_TARGET && pagesTried < AUTO_FILL_MAX_PAGES && totalAdded < AUTO_FILL_MAX_NEW_ROWS) {
-        pagesTried++;
-        const nextPage = startPage + pagesTried;
-        const url = buildPageUrl(nextPage);
-
-        let newRows = [];
-        try {
-          newRows = await fetchBrowsePageRows(url);
-        } catch (e) {
-          console.warn('[FL Grid] autoFill fetch failed:', url, e);
-          break;
-        }
-
-        if (!newRows.length) break;
-
-        const added = appendRowsToDom(newRows);
-        totalAdded += added;
-
-        // learn genres from new rows too
-        const catId = getCatId();
-        const newGenres = [];
-        newRows.forEach(r => {
-          const f = findGenreFont(r);
-          if (!f) return;
-          extractGenres(f.textContent).forEach(g => newGenres.push(g));
-        });
-        learnGenresForCat(catId, newGenres);
-
-        // re-apply filter + refresh grid/list
-        applyFilter(selected);
-
-        if (getViewMode() === 'grid') rebuildGrid();
-        else addPlexButtonsToRows();
-
-        visible = getVisibleRowCount();
-        setAutoFillStatus(`Auto-fill: loading more… (${visible}/${AUTO_FILL_TARGET})`);
-
-        if (added === 0) break;
-      }
-
-      setAutoFillStatus(visible >= AUTO_FILL_TARGET ? '' : `Auto-fill stopped at ${visible} results.`);
-      // refresh panel list if we learned new genres
-      refreshGenreListUIOnly();
-
-    } finally {
-      autoFillRunning = false;
-    }
-  }
-
-  // ---------------- Draggable panel ----------------
   function applyInitialPanelPosition(panel) {
     const saved = getPanelPos();
     const defaultLeft = Math.max(12, window.innerWidth - 372 - 18);
@@ -1346,20 +1271,6 @@
     });
   }
 
-  // ---------------- Panel UI (genres = learned per category) ----------------
-  function getAllGenresForCurrentCat() {
-    const catId = getCatId();
-    const pageGenres = scanGenresFromPageRows();
-    // learn page genres
-    learnGenresForCat(catId, pageGenres);
-
-    // use learned genres (accumulated) for the list, not only current page
-    const known = getKnownGenresForCat(catId);
-    // ensure current page genres exist even if bank is empty (first run)
-    const merged = [...new Set([...(known || []), ...(pageGenres || [])])];
-    return merged.sort((a, b) => a.localeCompare(b));
-  }
-
   function buildPanel(genres) {
     let panel = document.getElementById('fl-genre-panel');
     if (panel) return panel;
@@ -1373,7 +1284,7 @@
     panel.innerHTML = `
       <div class="hdr">
         <b>FILELIST • GENRE GRID</b>
-        <div class="actions">
+        <div style="display:flex;gap:8px;align-items:center">
           <div class="btn" id="fl-collapse">${ui.collapsed ? '▶' : '▼'}</div>
           <div class="btn" id="fl-refresh">Refresh</div>
         </div>
@@ -1390,8 +1301,7 @@
           <div style="width:54px;text-align:right;color:var(--fl-muted)" id="fl-size-val">${ui.cardSize}px</div>
         </div>
 
-        <div class="hint">Thumbs + rating + trailers from details.php (cached). Hover a card 1s for trailer.</div>
-        <div id="fl-auto-fill-status"></div>
+        <div class="hint">Thumbs + rating + trailers from details.php (cached). Hover a card 3s for trailer.</div>
 
         <div class="row pillbar">
           <div class="pill ${getViewMode() === 'grid' ? 'active' : ''}" id="fl-view-grid">Grid</div>
@@ -1400,7 +1310,7 @@
           <div class="pill" id="fl-clear">Clear</div>
         </div>
 
-        <div class="hint" style="margin-top:10px">Genres (saved per category):</div>
+        <div class="hint" style="margin-top:10px">Genres (persistent):</div>
         <div class="genrelist" id="fl-genre-list"></div>
       </div>
     `;
@@ -1410,9 +1320,9 @@
     applyInitialPanelPosition(panel);
     makePanelDraggable(panel);
 
-    // build list
     const list = panel.querySelector('#fl-genre-list');
     const saved = getSavedFilter();
+
     list.innerHTML = genres.map(g => {
       const id = 'g_' + g.replace(/\W+/g, '_');
       return `
@@ -1423,7 +1333,6 @@
       `;
     }).join('');
 
-    // handlers
     panel.querySelector('#fl-collapse').addEventListener('click', (e) => {
       e.stopPropagation();
       const uiNow = getUIState();
@@ -1441,7 +1350,10 @@
 
     panel.querySelector('#fl-clear').addEventListener('click', () => {
       saveFilter({});
-      refreshGenreListUIOnly(true);
+      genres.forEach(g => {
+        const cb = document.getElementById('g_' + g.replace(/\W+/g, '_'));
+        if (cb) cb.checked = false;
+      });
       runAll();
     });
 
@@ -1451,6 +1363,7 @@
       saveUIState(uiNow);
       panel.querySelector('#fl-size-val').textContent = `${uiNow.cardSize}px`;
       applyCardSize(uiNow.cardSize);
+      rebuildGrid();
     });
 
     panel.querySelector('#fl-hide-original').addEventListener('click', () => {
@@ -1476,6 +1389,7 @@
       panel.querySelector('#fl-view-grid').classList.add('active');
       panel.querySelector('#fl-view-list').classList.remove('active');
       rebuildGrid();
+      autoFillToTarget();
     });
 
     panel.querySelector('#fl-view-list').addEventListener('click', () => {
@@ -1502,12 +1416,12 @@
       uiNow.query = e.target.value || '';
       saveUIState(uiNow);
       rebuildGrid();
+      autoFillToTarget();
     });
 
     list.addEventListener('change', () => {
-      const currentGenres = getAllGenresForCurrentCat();
       const sel = {};
-      currentGenres.forEach(g => {
+      genres.forEach(g => {
         const cb = document.getElementById('g_' + g.replace(/\W+/g, '_'));
         if (cb?.checked) sel[g] = true;
       });
@@ -1518,100 +1432,9 @@
     return panel;
   }
 
-  function refreshGenreListUIOnly(clearAll) {
-    const panel = document.getElementById('fl-genre-panel');
-    if (!panel) return;
-
-    const list = panel.querySelector('#fl-genre-list');
-    if (!list) return;
-
-    const genres = getAllGenresForCurrentCat();
-    const saved = clearAll ? {} : getSavedFilter();
-
-    list.innerHTML = genres.map(g => {
-      const id = 'g_' + g.replace(/\W+/g, '_');
-      return `
-        <label>
-          <input type="checkbox" id="${id}" ${saved[g] ? 'checked' : ''}>
-          <span>${escapeHtml(g)}</span>
-        </label>
-      `;
-    }).join('');
-  }
-
-  // ---------------- What's new popup ----------------
-  function showWhatsNewIfFirstTime() {
-    if (localStorage.getItem(WHATSNEW_SEEN_KEY) === '1') return;
-
-    const modal = document.createElement('div');
-    modal.id = 'fl-whatsnew';
-    modal.style.cssText = `
-      position:fixed; inset:0;
-      z-index: 99999999;
-      display:flex; align-items:center; justify-content:center;
-      background: rgba(0,0,0,.60);
-      font: 12px/1.35 Tahoma,Verdana,Arial,sans-serif;
-      color: #d7dde6;
-    `;
-
-    modal.innerHTML = `
-      <div style="
-        width: min(560px, calc(100vw - 22px));
-        background: rgba(15, 22, 32, .98);
-        border: 1px solid #263141;
-        border-radius: 12px;
-        box-shadow: 0 18px 65px rgba(0,0,0,.6);
-        overflow:hidden;
-      ">
-        <div style="
-          padding: 12px 12px 10px;
-          border-bottom: 1px solid #263141;
-          background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0)),
-                      linear-gradient(90deg, rgba(123,210,31,.18), rgba(123,210,31,0) 35%);
-          display:flex; align-items:center; justify-content:space-between; gap:10px;
-        ">
-          <b style="letter-spacing:.2px;">What’s new (since v2.5)</b>
-          <span id="fl-whatsnew-x" style="cursor:pointer;opacity:.9;">✕</span>
-        </div>
-        <div style="padding: 12px;">
-          <ul style="margin:0; padding-left:18px; color:#d7dde6;">
-            <li><b>Trailer preview on hover (1s)</b> + arming progress bar on the card.</li>
-            <li><b>Rating badge</b> pulled from details page (⭐).</li>
-            <li><b>Genres are now learned per Filelist category</b> (cat dropdown). Your list grows as you browse pages.</li>
-            <li><b>Fix old genre format</b> like <code>Action | Comedy | ...</code> (auto-splits; no more “one big genre”).</li>
-            <li><b>Auto-fill after filtering:</b> if you see too few results, it loads next pages until ~${AUTO_FILL_TARGET} visible.</li>
-            <li><b>UI fixes:</b> Refresh button stays inside the draggable panel header.</li>
-          </ul>
-          <div style="margin-top:12px; color:#97a4b6; font-size:11px;">
-            Tip: Hover any poster card for 1 seconds to auto-open the trailer preview (if available on details).
-          </div>
-          <div style="display:flex; gap:8px; margin-top:12px;">
-            <button id="fl-whatsnew-ok" style="
-              flex:1; cursor:pointer; padding:8px 10px; border-radius:10px;
-              border:1px solid #263141; background: rgba(123,210,31,.18);
-              color:#eaffd0; font-weight:800;
-            ">OK</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    const close = () => {
-      localStorage.setItem(WHATSNEW_SEEN_KEY, '1');
-      modal.remove();
-    };
-
-    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
-    modal.querySelector('#fl-whatsnew-x').addEventListener('click', close);
-    modal.querySelector('#fl-whatsnew-ok').addEventListener('click', close);
-
-    document.body.appendChild(modal);
-  }
-
-  // ---------------- Run all ----------------
   function runAll() {
-    // learn genres from this page into bank, then render list from bank
-    refreshGenreListUIOnly();
+    markAndHideDuplicatesInDOM();
+    ensureExtraRowsHost();
 
     applyFilter(getSavedFilter());
 
@@ -1621,6 +1444,7 @@
 
     if (getViewMode() === 'grid') {
       rebuildGrid();
+      autoFillToTarget();
     } else {
       const wrap = document.getElementById('fl-grid-wrap');
       if (wrap) wrap.style.display = 'none';
@@ -1635,20 +1459,15 @@
     }
 
     addPlexButtonsToRows();
-
-    // auto-fill (async)
-    autoFillResultsIfNeeded();
   }
 
-  // ---------------- Init ----------------
   function init() {
     injectStyles();
 
     const rows = getAllRows();
     if (!rows.length) { log('No rows yet, retrying…'); return false; }
 
-    // learn current page genres and build panel from learned set
-    const genres = getAllGenresForCurrentCat();
+    const genres = scanGenres();
     if (!genres.length) { log('No genres found (yet)'); return false; }
 
     buildPanel(genres);
@@ -1664,14 +1483,13 @@
       syncHideOriginal(ui.hideOriginal);
     }
 
-    showWhatsNewIfFirstTime();
     runAll();
     return true;
   }
 
   let tries = 0;
   const timer = setInterval(() => {
-    if (init() || ++tries > 40) clearInterval(timer);
+    if (init() || ++tries > 30) clearInterval(timer);
   }, 300);
 
 })();
