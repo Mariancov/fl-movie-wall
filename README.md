@@ -25,7 +25,7 @@
 
 FL Movie Wall is a lightweight userscript that transforms Filelist browse pages into a modern **poster grid** while keeping the classic OG Filelist look and performance.
 
-No plugins. No extensions. Just one script.
+No plugins. No extra apps. Just one script.
 
 ---
 
@@ -50,50 +50,37 @@ Open the official store page for your browser and click **Add to browser**:
 - **Microsoft Edge Add-ons:**  
   https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd
 
-> If your browser blocks install from stores, you can also search “Tampermonkey extension” in your browser’s extension store.
-
 ---
 
-### 2) Make sure extensions can run “UserScripts”
-Some browsers require enabling UserScripts / Developer options.
-
-#### Brave
-1. Go to: `brave://extensions/`
-2. Toggle **Developer mode** (top-right)
-3. Click **Tampermonkey**
-4. Enable **Allow access to file URLs** (optional) and **Allow in private** (optional)
-5. Make sure Tampermonkey is **Enabled**
+### 2) Enable Developer Mode (required on some setups)
+This helps UserScripts run properly.
 
 #### Chrome
 1. Go to: `chrome://extensions/`
 2. Toggle **Developer mode** (top-right)
-3. Click **Tampermonkey**
-4. (Optional) Enable **Allow in incognito**
-5. Make sure Tampermonkey is **Enabled**
+
+#### Brave
+1. Go to: `brave://extensions/`
+2. Toggle **Developer mode** (top-right)
 
 #### Edge
 1. Go to: `edge://extensions/`
 2. Toggle **Developer mode**
-3. Click **Tampermonkey**
-4. Make sure it’s **Enabled**
-
-> Note: You generally do **not** need “file access” for this script (it runs on `filelist.io`), but enabling Developer mode helps in some setups.
 
 ---
 
-### 3) Enable Tampermonkey settings (recommended)
+### 3) Tampermonkey recommended settings
 1. Click the **Tampermonkey** icon in the browser toolbar
 2. Open **Dashboard**
 3. Go to **Settings**
-4. Recommended toggles:
-   - ✅ **Config mode**: **Beginner** or **Advanced** (either works)
-   - ✅ **Check for updates**: **Daily** (or more frequent if you want)
-   - ✅ **Script update**: **Enabled**
+4. Recommended:
+   - ✅ **Script update**: Enabled
+   - ✅ **Check for updates**: Daily (or more)
 
 ---
 
 ### 4) Install FL Movie Wall
-1. Open this link:
+1. Open:
    https://raw.githubusercontent.com/Mariancov/fl-movie-wall/main/dist/fl-movie-wall.user.js
 2. Tampermonkey will open an install page
 3. Click **Install**
@@ -112,16 +99,22 @@ You’ll see the panel + grid (depending on your saved view mode).
 
 ## ⚙️ Features
 
-- Persistent genre filter  
-- Movie poster grid view  
-- Thumbnails fetched from `details.php` and cached  
-- Draggable control panel (position remembered)  
-- Grid / List toggle  
-- Hide original list option  
-- Lightweight — no external dependencies  
-- **Card hover trailer preview (3s delay):** Hover any poster card for 3 seconds to auto-open an autoplay (muted) trailer preview popup (if a YouTube trailer exists on `details.php`).
-- **Hover arming indicator:** While hovering, a small progress bar animates at the bottom of the card so the user knows the trailer preview is about to load.
-- **Trailer popup pinning:** Click empty space on a card (not links) to pin/unpin the trailer preview popup; press **Esc** to close.
+- Persistent genre filter (saved)
+- **Genre learning per Filelist category:** the script remembers genres it discovers over time (even if they’re not on the current page), so your genre list grows as you browse that category
+- Movie poster grid view
+- Thumbnails fetched from `details.php` and cached
+- Rating extracted from `details.php` and shown on cards (cached)
+- Draggable control panel (position remembered)
+- Grid / List toggle
+- Hide original list option
+- Lightweight — no external dependencies
+
+### 🎬 Trailer preview (card hover)
+- **Hover any poster card for 3 seconds** → trailer preview popup opens automatically (if the details page has a YouTube embed)
+- **Loading indicator:** a small progress bar animates at the bottom of the card while arming
+- **Autoplay muted**
+- **Pin/unpin:** click empty space on a card (not links) to pin/unpin the popup
+- Press **Esc** to close
 
 ---
 
@@ -130,10 +123,8 @@ You’ll see the panel + grid (depending on your saved view mode).
 The script supports automatic updates via the `@updateURL` and `@downloadURL` fields.
 
 New version workflow:
-
 - Edit `dist/fl-movie-wall.user.js`
 - Increase `@version`
 - Push to `main`
 
-Users will receive updates automatically.
-
+Users receive updates automatically.
