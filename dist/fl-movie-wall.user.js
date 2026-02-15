@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Filelist Genre Filter + Movie Grid (OG FL look + draggable panel)
 // @namespace    https://github.com/Mariancov/fl-movie-wall
-// @version      2.5
-// @description  Filter Filelist torrents by genre (persistent) + poster grid (thumbs via details.php + cache). OG Filelist-inspired design + draggable panel with remembered position.
+// @version      2.6
+// @description  Filter Filelist torrents by genre (persistent per category) + poster grid (thumbs via details.php + cache). OG Filelist-inspired design + draggable panel with remembered position.
 // @author       Mariancov
 // @match        https://filelist.io/browse.php*
 // @match        https://www.filelist.io/browse.php*
@@ -18,23 +18,29 @@
 (function () {
   'use strict';
 
-  const STORAGE_KEY = 'fl_genre_filter_v2';
+  // Selected genres (per category)
+  const STORAGE_KEY = 'fl_genre_filter_by_cat_v1'; // { [catKey]: { [genre]: true } }
   const UI_KEY = 'fl_genre_ui_v2';
   const VIEW_KEY = 'fl_genre_view_v2';
 
   const PANEL_POS_KEY = 'fl_panel_pos_v1';
 
-  const META_CACHE_KEY = 'fl_thumb_cache_v3'; // {thumb,rating,ytId,ts}
+  // Learned genres per category
+  const GENRE_MASTER_KEY = 'fl_genre_master_by_cat_v1'; // { [catKey]: { name, genres:[...], ts } }
+
+  // Details meta cache
+  const META_CACHE_KEY = 'fl_thumb_cache_v3'; // { [detailsAbs]: {thumb,rating,ytId,ts} }
   const META_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const FETCH_CONCURRENCY = 4;
 
+  // Plex handoff (kept, but buttons are hidden by CSS below)
   const PLEX_HANDOFF_KEY = 'flmw_plex_handoff_v1';
   const PLEX_WEB_URL = 'https://app.plex.tv/desktop#!/';
 
   // Card hover trailer preview
-  const CARD_HOVER_OPEN_MS = 1000;
+  const CARD_HOVER_OPEN_MS = 3000;
   const CARD_HOVER_CLOSE_MS = 220;
-  const CARD_PREVIEW_REQUIRE_YT = true; // if true: only arm if ytId exists
+  const CARD_PREVIEW_REQUIRE_YT = true;
   const CARD_PREVIEW_AUTOPLAY_MUTED = true;
 
   const DEFAULT_UI = {
@@ -47,20 +53,77 @@
   function log(...a) { console.log('[FL Grid]', ...a); }
   function safeJSONParse(s, fallback) { try { return JSON.parse(s); } catch { return fallback; } }
 
-  function getSavedFilter() { return safeJSONParse(localStorage.getItem(STORAGE_KEY) || '{}', {}); }
-  function saveFilter(data) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data || {})); }
+  // ---------------- Category detection ----------------
+  function getCatFromURL() {
+    try {
+      const u = new URL(location.href);
+      const v = u.searchParams.get('cat');
+      return (v && /^\d+$/.test(v)) ? v : null;
+    } catch { return null; }
+  }
 
+  function getCatFromSelect() {
+    const sel = document.querySelector('select[name="cat"]');
+    if (!sel) return null;
+
+    const val = (sel.value || '').trim();
+    const opt = sel.selectedOptions?.[0];
+    const name = (opt?.textContent || '').trim();
+
+    if (val && /^\d+$/.test(val)) {
+      return { id: val, name: name || `cat:${val}` };
+    }
+    return null;
+  }
+
+  function getCurrentCategory() {
+    // Prefer select (more reliable on Filelist), fallback to URL param
+    const fromSel = getCatFromSelect();
+    if (fromSel) return fromSel;
+
+    const fromUrl = getCatFromURL();
+    if (fromUrl) return { id: fromUrl, name: `cat:${fromUrl}` };
+
+    return { id: '0', name: '(toate)' };
+  }
+
+  function catKeyOf(cat) {
+    // stable key: id
+    return String(cat?.id ?? '0');
+  }
+
+  // ---------------- Selected filters storage (per category) ----------------
+  function loadAllSavedFilters() {
+    return safeJSONParse(localStorage.getItem(STORAGE_KEY) || '{}', {});
+  }
+  function saveAllSavedFilters(obj) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(obj || {}));
+  }
+
+  function getSavedFilterForCat(catKey) {
+    const all = loadAllSavedFilters();
+    return all[catKey] || {};
+  }
+  function setSavedFilterForCat(catKey, data) {
+    const all = loadAllSavedFilters();
+    all[catKey] = data || {};
+    saveAllSavedFilters(all);
+  }
+
+  // ---------------- UI state ----------------
   function getUIState() { return { ...DEFAULT_UI, ...(safeJSONParse(localStorage.getItem(UI_KEY) || '{}', {})) }; }
   function saveUIState(data) { localStorage.setItem(UI_KEY, JSON.stringify(data || {})); }
 
   function getViewMode() { return localStorage.getItem(VIEW_KEY) || 'grid'; }
   function setViewMode(mode) { localStorage.setItem(VIEW_KEY, mode); }
 
+  // ---------------- Panel position ----------------
   function getPanelPos() { return safeJSONParse(localStorage.getItem(PANEL_POS_KEY) || 'null', null); }
   function savePanelPos(pos) { localStorage.setItem(PANEL_POS_KEY, JSON.stringify(pos)); }
 
   function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 
+  // ---------------- HTML helpers ----------------
   function escapeHtml(s) {
     return String(s || '')
       .replaceAll('&', '&amp;')
@@ -77,6 +140,7 @@
     return location.origin + '/' + url;
   }
 
+  // ---------------- Genre extraction ----------------
   function extractGenres(text) {
     return (text || '')
       .replace(/[\[\]]/g, '')
@@ -92,7 +156,7 @@
 
   function getAllRows() { return [...document.querySelectorAll('.torrentrow')]; }
 
-  function scanGenres() {
+  function scanGenresFromPage() {
     const set = new Set();
     getAllRows().forEach(row => {
       const f = findGenreFont(row);
@@ -112,6 +176,70 @@
       row.style.display = show ? '' : 'none';
       row.dataset.flVisible = show ? '1' : '0';
     });
+  }
+
+  // ---------------- Learned genres per category ----------------
+  function loadMasterByCat() {
+    const obj = safeJSONParse(localStorage.getItem(GENRE_MASTER_KEY) || '{}', {});
+    return obj && typeof obj === 'object' ? obj : {};
+  }
+
+  function saveMasterByCat(obj) {
+    localStorage.setItem(GENRE_MASTER_KEY, JSON.stringify(obj || {}));
+  }
+
+  function learnGenresForCurrentCategory() {
+    const cat = getCurrentCategory();
+    const key = catKeyOf(cat);
+
+    const scanned = scanGenresFromPage();
+    const selected = getSavedFilterForCat(key);
+
+    const master = loadMasterByCat();
+    const entry = master[key] || { name: cat.name, genres: [], ts: 0 };
+
+    entry.name = cat.name || entry.name || `cat:${key}`;
+    const set = new Set(Array.isArray(entry.genres) ? entry.genres : []);
+
+    // Learn all genres visible on this page
+    scanned.forEach(g => set.add(g));
+
+    // Also keep any selected genres even if they aren't on this page
+    Object.keys(selected || {}).forEach(g => set.add(g));
+
+    entry.genres = [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+    entry.ts = Date.now();
+
+    master[key] = entry;
+    saveMasterByCat(master);
+
+    return { cat, key, genres: entry.genres };
+  }
+
+  function getGenresForUI(catKey) {
+    const master = loadMasterByCat();
+    const saved = getSavedFilterForCat(catKey);
+
+    const learned = (master[catKey]?.genres || []).slice();
+    learned.sort((a, b) => a.localeCompare(b));
+
+    const selected = [];
+    const unselected = [];
+
+    for (const g of learned) {
+      if (saved[g]) selected.push(g);
+      else unselected.push(g);
+    }
+
+    // If user has selected genres that never got learned somehow, include them too (safety)
+    Object.keys(saved || {}).forEach(g => {
+      if (!learned.includes(g)) selected.push(g);
+    });
+
+    selected.sort((a, b) => a.localeCompare(b));
+    unselected.sort((a, b) => a.localeCompare(b));
+
+    return { selected, unselected, all: [...selected, ...unselected] };
   }
 
   // ---------- Trailer popup ----------
@@ -162,7 +290,7 @@
             allowfullscreen></iframe>
         </div>
         <div style="margin-top:8px; color:#97a4b6; font-size:11px;">
-          Hover 3s on a card to preview • Click 📌 to pin
+          Hover ${Math.round(CARD_HOVER_OPEN_MS / 1000)}s on a card to preview • Click 📌 to pin
         </div>
       </div>
     `;
@@ -199,8 +327,6 @@
       left = r.left - popRect.width - margin;
     }
     left = clamp(left, margin, window.innerWidth - popRect.width - margin);
-
-    // prefer top aligned; clamp into viewport
     top = clamp(top, margin, window.innerHeight - popRect.height - margin);
 
     pop.style.left = `${Math.round(left)}px`;
@@ -293,17 +419,12 @@
 
     style.textContent = `
       :root{
-        --fl-bg: #0b1016;
-        --fl-panel: #0f1620;
-        --fl-panel2: #0c121a;
         --fl-border: #263141;
         --fl-border2:#1b2431;
         --fl-text: #d7dde6;
         --fl-muted:#97a4b6;
         --fl-accent:#7bd21f;
         --fl-shadow: rgba(0,0,0,.55);
-
-        --plex-yellow: #e5a00d;
         --plex-yellow2:#ffd36b;
       }
 
@@ -439,6 +560,7 @@
       #fl-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(var(--fl-card), 1fr)); gap: 10px; }
 
       .fl-card{
+        position: relative;
         border-radius: 10px; overflow: hidden;
         border: 1px solid var(--fl-border);
         background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.01));
@@ -451,7 +573,6 @@
         box-shadow: 0 14px 28px rgba(0,0,0,.35), 0 0 0 2px rgba(123,210,31,.08), inset 0 1px 0 rgba(255,255,255,.04);
       }
 
-      /* 3s arming bar at bottom of the CARD (not the button) */
       .fl-card::after{
         content:"";
         position:absolute;
@@ -465,9 +586,6 @@
         transform: scaleX(0);
         opacity: 0;
         pointer-events:none;
-      }
-      .fl-card{
-        position: relative; /* needed for ::after */
       }
       .fl-card.fl-card-arming::after{
         opacity: 1;
@@ -536,49 +654,20 @@
         color: var(--plex-yellow2);
         font-weight: 800;
       }
-      .fl-badge.plex:hover{
-        border-color: rgba(229,160,13,.85);
-        box-shadow: 0 0 0 2px rgba(229,160,13,.12), inset 0 1px 0 rgba(255,255,255,.04);
-      }
 
       body.fl-hide-original .torrentrow{ display:none !important; }
 
-      .flmw-plex-pill{
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        height: 22px;
-        padding: 0 8px;
-        margin-left: 6px;
-        border-radius: 999px;
-        border: 1px solid rgba(229,160,13,.55);
-        background: linear-gradient(180deg, rgba(229,160,13,.22), rgba(229,160,13,.10));
-        color: var(--plex-yellow2) !important;
-        font: 800 11px/1 Tahoma, Verdana, Arial, sans-serif;
-        letter-spacing: .2px;
-        text-decoration: none !important;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-        cursor: pointer;
-        user-select:none;
-        white-space:nowrap;
-      }
-      .flmw-plex-pill:hover{
-        border-color: rgba(229,160,13,.85);
-        box-shadow: 0 0 0 2px rgba(229,160,13,.12), inset 0 1px 0 rgba(255,255,255,.08);
-      }
-      .flmw-plex-pill:active{ transform: translateY(1px); }
       /* TEMP: hide all Plex buttons */
-.flmw-plex-pill,
-.fl-badge.plex {
-  display: none !important;
-}
-
+      .flmw-plex-pill,
+      .fl-badge.plex{
+        display:none !important;
+      }
     `;
 
     document.head.appendChild(style);
   }
 
-  // ---------- Plex ----------
+  // ---------- Plex (kept) ----------
   function plexNormalizeTitle(raw) {
     return String(raw || '')
       .replace(/[\._]+/g, ' ')
@@ -622,14 +711,6 @@
 
       const rawTitle = (titleA.textContent || '').trim();
       if (!rawTitle) return;
-
-      const cellSpan = dlA.closest('span');
-      if (cellSpan) {
-        const current = (cellSpan.style.width || '').trim();
-        if (!current || current === '30px') cellSpan.style.width = '120px';
-        cellSpan.style.overflow = 'visible';
-        cellSpan.style.whiteSpace = 'nowrap';
-      }
 
       const btn = document.createElement('a');
       btn.href = '#';
@@ -767,6 +848,7 @@
     const gf = findGenreFont(row);
     const genres = gf ? extractGenres(gf.textContent) : [];
 
+    // Best-effort browse tooltip poster
     let thumb = null;
     const spanWithTooltip = row.querySelector('[data-original-title*="tmdb"], [data-original-title*="img"]');
     if (spanWithTooltip) {
@@ -866,7 +948,6 @@
         }
       }
 
-      // store yt + title on card root for hover preview
       const cardRoot = document.getElementById(it.cardId);
       if (cardRoot) {
         if (meta.ytId) cardRoot.setAttribute('data-fl-yt', meta.ytId);
@@ -999,44 +1080,10 @@
         if (!card) return;
         if (popPinned) return;
 
-        // if moving inside the same card, ignore
         const related = e.relatedTarget;
         if (related && card.contains(related)) return;
 
         disarmCardPreview(card);
-      }, true);
-
-      // Clicking the card pins/unpins the popup (without navigating)
-      grid.addEventListener('click', (e) => {
-        const card = e.target.closest('.fl-card');
-        if (!card) return;
-
-        // allow normal clicks on download/details/plex
-        if (e.target.closest('a')) return;
-
-        const yt = card.getAttribute('data-fl-yt') || '';
-        const title = card.getAttribute('data-fl-title') || '';
-        if (!yt) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        ensureTrailerPopup();
-        const pop = document.getElementById('fl-trailer-pop');
-        const iframe = document.getElementById('fl-trailer-pop-iframe');
-        const isSame = (iframe?.src || '').includes(`/embed/${yt}`);
-
-        if (popPinned && isSame) {
-          popPinned = false;
-          pop.querySelector('#fl-trailer-pop-pin').textContent = '📌';
-          closePopup(true);
-          return;
-        }
-
-        popPinned = true;
-        pop.querySelector('#fl-trailer-pop-pin').textContent = '📍';
-        setCardArming(card, false);
-        openPopup(yt, title, card);
       }, true);
 
       window.addEventListener('keydown', (ev) => {
@@ -1152,8 +1199,33 @@
     });
   }
 
-  // ---------- UI ----------
-  function buildPanel(genres) {
+  // ---------- Panel UI ----------
+  function renderGenreList(panel, catKey) {
+    const box = panel.querySelector('#fl-genre-list');
+    const { selected, unselected, all } = getGenresForUI(catKey);
+
+    panel.querySelector('#fl-genre-count').textContent =
+      `${selected.length} selected • ${unselected.length} unselected • ${all.length} total`;
+
+    box.innerHTML = all.map(g => {
+      const id = 'g_' + g.replace(/\W+/g, '_');
+      return `
+        <label>
+          <input type="checkbox" id="${id}" data-fl-genre="${escapeHtml(g)}">
+          <span>${escapeHtml(g)}</span>
+        </label>
+      `;
+    }).join('');
+
+    // set checked state according to saved
+    const saved = getSavedFilterForCat(catKey);
+    box.querySelectorAll('input[type="checkbox"][data-fl-genre]').forEach(cb => {
+      const g = cb.getAttribute('data-fl-genre') || '';
+      cb.checked = !!saved[g];
+    });
+  }
+
+  function buildPanel(catKey, catName) {
     let panel = document.getElementById('fl-genre-panel');
     if (panel) return panel;
 
@@ -1173,6 +1245,10 @@
       </div>
 
       <div class="body">
+        <div class="hint" id="fl-cat-hint" style="margin-top:0;">
+          Category: <b style="color:var(--fl-text)">${escapeHtml(catName || '')}</b>
+        </div>
+
         <div class="row">
           <input id="fl-q" type="text" placeholder="Search title..." value="${escapeHtml(ui.query)}">
         </div>
@@ -1183,7 +1259,8 @@
           <div style="width:54px;text-align:right;color:var(--fl-muted)" id="fl-size-val">${ui.cardSize}px</div>
         </div>
 
-        <div class="hint">Thumbs + rating + trailers from details.php (cached). Hover a card 3s for trailer.</div>
+        <div class="hint">Genres are remembered per main category. Switch Filelist category and this list grows over time.</div>
+        <div class="hint">Thumbs + rating + trailers from details.php (cached). Hover a card ${Math.round(CARD_HOVER_OPEN_MS/1000)}s for trailer.</div>
 
         <div class="row pillbar">
           <div class="pill ${getViewMode() === 'grid' ? 'active' : ''}" id="fl-view-grid">Grid</div>
@@ -1192,7 +1269,11 @@
           <div class="pill" id="fl-clear">Clear</div>
         </div>
 
-        <div class="hint" style="margin-top:10px">Genres (persistent):</div>
+        <div class="hint" style="margin-top:10px;display:flex;justify-content:space-between;gap:10px;">
+          <span>Genres (persistent):</span>
+          <span id="fl-genre-count" style="opacity:.9;"></span>
+        </div>
+
         <div class="genrelist" id="fl-genre-list"></div>
       </div>
     `;
@@ -1202,18 +1283,7 @@
     applyInitialPanelPosition(panel);
     makePanelDraggable(panel);
 
-    const list = panel.querySelector('#fl-genre-list');
-    const saved = getSavedFilter();
-
-    list.innerHTML = genres.map(g => {
-      const id = 'g_' + g.replace(/\W+/g, '_');
-      return `
-        <label>
-          <input type="checkbox" id="${id}" ${saved[g] ? 'checked' : ''}>
-          <span>${escapeHtml(g)}</span>
-        </label>
-      `;
-    }).join('');
+    renderGenreList(panel, catKey);
 
     panel.querySelector('#fl-collapse').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1227,16 +1297,15 @@
 
     panel.querySelector('#fl-refresh').addEventListener('click', (e) => {
       e.stopPropagation();
-      runAll();
+      runAll(true);
     });
 
     panel.querySelector('#fl-clear').addEventListener('click', () => {
-      saveFilter({});
-      genres.forEach(g => {
-        const cb = document.getElementById('g_' + g.replace(/\W+/g, '_'));
-        if (cb) cb.checked = false;
-      });
-      runAll();
+      const cat = getCurrentCategory();
+      const key = catKeyOf(cat);
+      setSavedFilterForCat(key, {});
+      renderGenreList(panel, key);
+      runAll(false);
     });
 
     panel.querySelector('#fl-size').addEventListener('input', (e) => {
@@ -1287,7 +1356,9 @@
       const wrap = document.getElementById('fl-grid-wrap');
       if (wrap) wrap.style.display = 'none';
 
-      applyFilter(getSavedFilter());
+      const cat = getCurrentCategory();
+      const key = catKeyOf(cat);
+      applyFilter(getSavedFilterForCat(key));
       addPlexButtonsToRows();
     });
 
@@ -1298,21 +1369,38 @@
       rebuildGrid();
     });
 
-    list.addEventListener('change', () => {
+    // Genre checkbox changes (per current category)
+    panel.querySelector('#fl-genre-list').addEventListener('change', () => {
+      const cat = getCurrentCategory();
+      const key = catKeyOf(cat);
+
       const sel = {};
-      genres.forEach(g => {
-        const cb = document.getElementById('g_' + g.replace(/\W+/g, '_'));
-        if (cb?.checked) sel[g] = true;
+      panel.querySelectorAll('#fl-genre-list input[type="checkbox"][data-fl-genre]').forEach(cb => {
+        const g = cb.getAttribute('data-fl-genre') || '';
+        if (cb.checked && g) sel[g] = true;
       });
-      saveFilter(sel);
-      runAll();
+
+      setSavedFilterForCat(key, sel);
+
+      // Keep selected even if missing on current page
+      learnGenresForCurrentCategory();
+
+      // Rerender list so selected stays on top
+      renderGenreList(panel, key);
+
+      runAll(false);
     });
 
     return panel;
   }
 
-  function runAll() {
-    applyFilter(getSavedFilter());
+  function runAll(learn) {
+    const cat = getCurrentCategory();
+    const key = catKeyOf(cat);
+
+    if (learn) learnGenresForCurrentCategory();
+
+    applyFilter(getSavedFilterForCat(key));
 
     const ui = getUIState();
     syncHideOriginal(ui.hideOriginal);
@@ -1334,6 +1422,14 @@
     }
 
     addPlexButtonsToRows();
+
+    // Update panel category label + list (handles category switching without reload too)
+    const panel = document.getElementById('fl-genre-panel');
+    if (panel) {
+      const hint = panel.querySelector('#fl-cat-hint');
+      if (hint) hint.innerHTML = `Category: <b style="color:var(--fl-text)">${escapeHtml(cat.name || '')}</b>`;
+      renderGenreList(panel, key);
+    }
   }
 
   function init() {
@@ -1342,10 +1438,8 @@
     const rows = getAllRows();
     if (!rows.length) { log('No rows yet, retrying…'); return false; }
 
-    const genres = scanGenres();
-    if (!genres.length) { log('No genres found (yet)'); return false; }
-
-    buildPanel(genres);
+    const { cat, key } = learnGenresForCurrentCategory();
+    buildPanel(key, cat.name);
 
     const ui = getUIState();
     applyCardSize(ui.cardSize);
@@ -1358,7 +1452,18 @@
       syncHideOriginal(ui.hideOriginal);
     }
 
-    runAll();
+    runAll(false);
+
+    // If user changes the Filelist category dropdown, update everything automatically
+    const sel = document.querySelector('select[name="cat"]');
+    if (sel && !sel.dataset.flBound) {
+      sel.dataset.flBound = '1';
+      sel.addEventListener('change', () => {
+        // Filelist usually reloads page; but in case it doesn't, refresh the panel state
+        setTimeout(() => runAll(true), 150);
+      });
+    }
+
     return true;
   }
 
